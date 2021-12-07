@@ -55,6 +55,7 @@ const (
 	SERVICE_ACCOUNT_NAME = "virtualrouter-sa"
 	ROLE_NAME            = "virtualrouter-role"
 	ROLE_BINDING_NAME    = "virtualrouter-rb"
+	VIRTUALROUTER_LABEL  = "virtualrouterInstance"
 )
 
 const (
@@ -426,7 +427,7 @@ func (c *Controller) handleObject(obj interface{}) {
 // the VirtualRouter resource that 'owns' it.
 func newDeployment(newNS string, virtualRouter *samplev1alpha1.VirtualRouter) *appsv1.Deployment {
 	labels := map[string]string{
-		"app": "virtualrouterInstance",
+		"app": VIRTUALROUTER_LABEL,
 	}
 	nodeSelectorMap := make(map[string]string)
 	for _, nodeSelector := range virtualRouter.Spec.NodeSelector {
