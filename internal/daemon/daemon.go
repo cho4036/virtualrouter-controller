@@ -10,10 +10,15 @@ import (
 )
 
 type NetworkDaemon struct {
+	daemonCfg   *DaemonConfig
 	crioCfg     *internalCrio.CrioConfig
 	netlinkCfg  *internalNetlink.Config
 	runnigState map[string]*virtualrouterSpec
 	vlanUse     map[int][]string
+}
+
+type DaemonConfig struct {
+	NodeName string
 }
 
 type virtualrouterSpec struct {
@@ -23,8 +28,9 @@ type virtualrouterSpec struct {
 	internalCIDR string
 }
 
-func NewDaemon(crioCfg *internalCrio.CrioConfig, netlinkCfg *internalNetlink.Config) *NetworkDaemon {
+func NewDaemon(daemonConfig *DaemonConfig, crioCfg *internalCrio.CrioConfig, netlinkCfg *internalNetlink.Config) *NetworkDaemon {
 	return &NetworkDaemon{
+		daemonCfg:   daemonConfig,
 		crioCfg:     crioCfg,
 		netlinkCfg:  netlinkCfg,
 		runnigState: make(map[string]*virtualrouterSpec),

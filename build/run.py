@@ -14,7 +14,7 @@ DOCKER_REGISTRY = '10.0.0.4:5000/'
 CONTROLLER_DOCKER_IMAGE_NAME = "virtualrouter-controller"
 CONTROLLER_DOCKER_IMAGE_TAG = "v0.0.3"
 DAEMON_DOCKER_IMAGE_NAME = 'virtualrouter-daemon'
-DAEMON_DOCKER_IMAGE_TAG = "v0.0.2"
+DAEMON_DOCKER_IMAGE_TAG = "v0.0.3"
 
 def subprocess_open(command):
     p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)

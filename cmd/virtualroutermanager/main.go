@@ -21,6 +21,8 @@ import (
 	"os"
 	"time"
 
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -32,6 +34,7 @@ import (
 	clientset "github.com/tmax-cloud/virtualrouter-controller/internal/utils/pkg/generated/clientset/versioned"
 	informers "github.com/tmax-cloud/virtualrouter-controller/internal/utils/pkg/generated/informers/externalversions"
 	"github.com/tmax-cloud/virtualrouter-controller/internal/utils/pkg/signals"
+	"github.com/tmax-cloud/virtualrouter-controller/internal/virtualroutermanager"
 	c1 "github.com/tmax-cloud/virtualrouter-controller/internal/virtualroutermanager"
 )
 
@@ -68,11 +71,16 @@ func main() {
 	}
 
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
+	labelSelector := v1.LabelSelector{MatchLabels: map[string]string{"app": virtualroutermanager.VIRTUALROUTER_LABEL}}
+	kubeInformerFactory2 := kubeinformers.NewSharedInformerFactoryWithOptions(kubeClient, time.Second*30, kubeinformers.WithTweakListOptions(func(opt *v1.ListOptions) {
+		opt.LabelSelector = labels.Set(labelSelector.MatchLabels).String()
+	}))
 	// exampleInformerFactory := informers.NewSharedInformerFactory(exampleClient, time.Second*30)
 	exampleInformerFactory := informers.NewFilteredSharedInformerFactory(exampleClient, time.Second*30, namespace, nil)
 
 	controller := c1.NewController(kubeClient, exampleClient,
 		kubeInformerFactory.Apps().V1().Deployments(),
+		kubeInformerFactory2.Core().V1().Pods(),
 		exampleInformerFactory.Tmax().V1().VirtualRouters())
 
 	// notice that there is no need to run Start methods in a separate goroutine. (i.e. go kubeInformerFactory.Start(stopCh)

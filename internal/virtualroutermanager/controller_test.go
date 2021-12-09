@@ -89,7 +89,7 @@ func (f *fixture) newController() (*Controller, informers.SharedInformerFactory,
 	k8sI := kubeinformers.NewSharedInformerFactory(f.kubeclient, noResyncPeriodFunc())
 
 	c := NewController(f.kubeclient, f.client,
-		k8sI.Apps().V1().Deployments(), i.Tmax().V1().VirtualRouters())
+		k8sI.Apps().V1().Deployments(), k8sI.Core().V1().Pods(), i.Tmax().V1().VirtualRouters())
 
 	c.virtualRoutersSynced = alwaysReady
 	c.deploymentsSynced = alwaysReady

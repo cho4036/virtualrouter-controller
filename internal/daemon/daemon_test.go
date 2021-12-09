@@ -14,6 +14,9 @@ var _ daemon.NetworkDaemon
 
 func TestDaemonInitialize(t *testing.T) {
 	d := daemon.NewDaemon(
+		&daemon.DaemonConfig{
+			NodeName: "nodeName",
+		},
 		&crio.CrioConfig{
 			RuntimeEndpoint:      "unix:///var/run/crio/crio.sock",
 			RuntimeEndpointIsSet: true,

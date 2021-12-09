@@ -24,7 +24,7 @@ require (
 	k8s.io/code-generator v0.19.15
 	k8s.io/cri-api v0.20.6
 	k8s.io/klog/v2 v2.8.0
-	k8s.io/kubernetes v1.13.0
+	k8s.io/kubernetes v1.19.0
 )
 
 replace (

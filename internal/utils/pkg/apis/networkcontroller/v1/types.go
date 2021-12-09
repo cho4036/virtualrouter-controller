@@ -46,7 +46,8 @@ type VirtualRouterSpec struct {
 
 // VirtualRouterStatus is the status for a VirtualRouter resource
 type VirtualRouterStatus struct {
-	AvailableReplicas int32 `json:"availableReplicas"`
+	AvailableReplicas int32           `json:"availableReplicas"`
+	ReplicaStatus     []ReplicaStatus `json:"replicaStatus"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -63,3 +64,28 @@ type NodeSelector struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 }
+
+type ReplicaStatus struct {
+	Scheduled bool   `json:"scheduled"`
+	PodName   string `json:"podName"`
+	NodeName  string `json:"hostName"`
+	Bridged   bool   `json:"bridged"`
+	// Scheduling -> Scheduled -> Bridging -> Bridged -> Running -> UnScheduling -> UnScheduled -> UnBridging -> UnBridged -> Removed
+	Phase string `json:"phase"`
+}
+
+type Phase string
+
+var (
+	SCHEDULING   Phase = "Scheduling"
+	SCHEDULED    Phase = "Scheduled"
+	BRIDGING     Phase = "Bridging"
+	BRIDGED      Phase = "Bridged"
+	RUNNING      Phase = "Running"
+	UNSCHEDULING Phase = "UnScheduling"
+	UNSCHEDULED  Phase = "UnScheduled"
+	UNBRIDGING   Phase = "UnBridging"
+	UNBRIDGED    Phase = "UnBridged"
+	REMOVED      Phase = "Removed"
+	REMOVING     Phase = "Removing"
+)

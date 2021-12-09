@@ -25,18 +25,23 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 
+	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
+	v1 "github.com/tmax-cloud/virtualrouter-controller/internal/utils/pkg/apis/networkcontroller/v1"
 	clientset "github.com/tmax-cloud/virtualrouter-controller/internal/utils/pkg/generated/clientset/versioned"
 	samplescheme "github.com/tmax-cloud/virtualrouter-controller/internal/utils/pkg/generated/clientset/versioned/scheme"
 	informers "github.com/tmax-cloud/virtualrouter-controller/internal/utils/pkg/generated/informers/externalversions/networkcontroller/v1"
 	listers "github.com/tmax-cloud/virtualrouter-controller/internal/utils/pkg/generated/listers/networkcontroller/v1"
+
+	v1Pod "k8s.io/kubernetes/pkg/api/v1/pod"
 )
 
 const controllerAgentName = "virtual-router"
@@ -73,8 +78,8 @@ type Controller struct {
 
 	networkDaemon *NetworkDaemon
 
-	// podLister            corelisters.PodLister
-	// podSynced            cache.InformerSynced
+	podLister corelisters.PodLister
+	podSynced cache.InformerSynced
 	// deploymentsLister    appslisters.DeploymentLister
 	// deploymentsSynced    cache.InformerSynced
 	virtualRoutersLister listers.VirtualRouterLister
@@ -91,13 +96,16 @@ type Controller struct {
 	recorder record.EventRecorder
 }
 
+type podKey string
+type virtualrouterKey string
+
 // NewController returns a new sample controller
 func NewController(
 	kubeclientset kubernetes.Interface,
 	sampleclientset clientset.Interface,
 	daemon *NetworkDaemon,
 	// deploymentInformer appsinformers.DeploymentInformer,
-	// podInformer coreinformers.PodInformer,
+	podInformer coreinformers.PodInformer,
 	virtualRouterInformer informers.VirtualRouterInformer) *Controller {
 
 	// Create event broadcaster
@@ -111,13 +119,11 @@ func NewController(
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: controllerAgentName})
 
 	controller := &Controller{
-		kubeclientset:   kubeclientset,
-		sampleclientset: sampleclientset,
-		networkDaemon:   daemon,
-		// deploymentsLister:    deploymentInformer.Lister(),
-		// deploymentsSynced:    deploymentInformer.Informer().HasSynced,
-		// podLister:            podInformer.Lister(),
-		// podSynced:            podInformer.Informer().HasSynced,
+		kubeclientset:        kubeclientset,
+		sampleclientset:      sampleclientset,
+		networkDaemon:        daemon,
+		podLister:            podInformer.Lister(),
+		podSynced:            podInformer.Informer().HasSynced,
 		virtualRoutersLister: virtualRouterInformer.Lister(),
 		virtualRoutersSynced: virtualRouterInformer.Informer().HasSynced,
 		workqueue:            workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "VirtualRouters"),
@@ -134,20 +140,20 @@ func NewController(
 		DeleteFunc: controller.enqueueVirtualRouter,
 	})
 
-	// podInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-	// 	AddFunc: controller.enqueuePod,
-	// 	UpdateFunc: func(old, new interface{}) {
-	// 		newPod := new.(*corev1.Pod)
-	// 		oldPod := old.(*corev1.Pod)
-	// 		if newPod.ResourceVersion == oldPod.ResourceVersion {
-	// 			// Periodic resync will send update events for all known Deployments.
-	// 			// Two different versions of the same Deployment will always have different RVs.
-	// 			return
-	// 		}
-	// 		controller.enqueuePod(new)
-	// 	},
-	// 	DeleteFunc: controller.enqueuePod,
-	// })
+	podInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: controller.enqueuePod,
+		UpdateFunc: func(old, new interface{}) {
+			newPod := new.(*corev1.Pod)
+			oldPod := old.(*corev1.Pod)
+			if newPod.ResourceVersion == oldPod.ResourceVersion {
+				// Periodic resync will send update events for all known Deployments.
+				// Two different versions of the same Deployment will always have different RVs.
+				return
+			}
+			controller.enqueuePod(new)
+		},
+		DeleteFunc: controller.enqueuePod,
+	})
 
 	return controller
 }
@@ -165,8 +171,12 @@ func (c *Controller) Run(threadiness int, stopCh <-chan struct{}) error {
 
 	// Wait for the caches to be synced before starting workers
 	klog.Info("Waiting for informer caches to sync")
-	// if ok := cache.WaitForCacheSync(stopCh, c.deploymentsSynced, c.virtualRoutersSynced); !ok {
+
 	if ok := cache.WaitForCacheSync(stopCh, c.virtualRoutersSynced); !ok {
+		return fmt.Errorf("failed to wait for caches to sync")
+	}
+
+	if ok := cache.WaitForCacheSync(stopCh, c.podSynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
 
@@ -226,12 +236,19 @@ func (c *Controller) processNextWorkItem() bool {
 		}
 		// Run the syncHandler, passing it the namespace/name string of the
 		// VirtualRouter resource to be synced.
+
 		// if err := c.syncHandler(key); err != nil {
-		if err := c.syncHandler(key); err != nil {
+		// 	// Put the item back on the workqueue to handle any transient errors.
+		// 	c.workqueue.AddRateLimited(key)
+		// 	return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
+		// }
+
+		if err := c.syncHandler(obj); err != nil {
 			// Put the item back on the workqueue to handle any transient errors.
-			c.workqueue.AddRateLimited(key)
+			c.workqueue.AddRateLimited(obj)
 			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
 		}
+
 		// Finally, if no error occurs we Forget this item so it does not
 		// get queued again until another change happens.
 		c.workqueue.Forget(obj)
@@ -250,30 +267,110 @@ func (c *Controller) processNextWorkItem() bool {
 // syncHandler compares the actual state with the desired, and attempts to
 // converge the two. It then updates the Status block of the VirtualRouter resource
 // with the current status of the resource.
-func (c *Controller) syncHandler(key string) error {
-	klog.Info(key)
-	namespace, name, err := cache.SplitMetaNamespaceKey(key)
-	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
-		return nil
-	}
-
-	virtualRouter, err := c.virtualRoutersLister.VirtualRouters(namespace).Get(name)
-	if err != nil {
-		// The VirtualRouter resource may no longer exist, in which case we stop
-		// processing.
-		if errors.IsNotFound(err) {
-			c.networkDaemon.ClearContainer(name)
-			utilruntime.HandleError(fmt.Errorf("virtualRouter '%s' in work queue no longer exists", key))
+// func (c *Controller) syncHandler(key string) error {
+func (c *Controller) syncHandler(obj interface{}) error {
+	// klog.Info(key)
+	switch key := obj.(type) {
+	case podKey:
+		namespace, name, err := cache.SplitMetaNamespaceKey(string(key))
+		if err != nil {
+			utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 			return nil
 		}
 
-		return err
+		virtualRouterPod, err := c.podLister.Pods(namespace).Get(name)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				c.networkDaemon.ClearContainer(name)
+				utilruntime.HandleError(fmt.Errorf("virtualRouter '%s' in work queue no longer exists", key))
+				return nil
+			}
+			return err
+		}
+		if !v1Pod.IsPodReady(virtualRouterPod) {
+			return nil
+		}
+
+		virtualRouterCRs, err := c.virtualRoutersLister.VirtualRouters(namespace).List(nil)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		var virtualRouterCR *v1.VirtualRouter
+		for _, cr := range virtualRouterCRs {
+			_, exist := v1Pod.GetContainerStatus(virtualRouterPod.Status.ContainerStatuses, cr.Name)
+			if !exist {
+				return nil
+			}
+			virtualRouterCR = cr
+		}
+
+		if err := c.networkDaemon.Sync(name, virtualRouterCR.Spec.VlanNumber, virtualRouterCR.Spec.InternalIPs, virtualRouterCR.Spec.ExternalIPs, virtualRouterCR.Spec.InternalCIDR); err != nil {
+			klog.ErrorS(err, "Sync failed")
+			return err
+		}
+
+	case virtualrouterKey:
+		namespace, name, err := cache.SplitMetaNamespaceKey(string(key))
+		if err != nil {
+			utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
+			return nil
+		}
+
+		virtualRouterCR, err := c.virtualRoutersLister.VirtualRouters(namespace).Get(name)
+		if err != nil {
+			// The VirtualRouter resource may no longer exist, in which case we stop
+			// processing.
+			if errors.IsNotFound(err) {
+				c.networkDaemon.ClearContainer(name)
+				utilruntime.HandleError(fmt.Errorf("virtualRouter '%s' in work queue no longer exists", key))
+				return nil
+			}
+
+			return err
+		}
+
+		virtualRouterPods, err := c.podLister.Pods(namespace).List(nil)
+		for _, virtualRouterPod := range virtualRouterPods {
+			if virtualRouterPod != nil && virtualRouterPod.Status.ContainerStatuses != nil {
+				for _, item := range virtualRouterPod.Status.ContainerStatuses {
+					if name == item.Name {
+
+					}
+				}
+			}
+		}
+
+		if err := c.networkDaemon.Sync(name, virtualRouterCR.Spec.VlanNumber, virtualRouterCR.Spec.InternalIPs, virtualRouterCR.Spec.ExternalIPs, virtualRouterCR.Spec.InternalCIDR); err != nil {
+			klog.ErrorS(err, "Sync failed")
+			return err
+		}
+
 	}
-	if err := c.networkDaemon.Sync(name, virtualRouter.Spec.VlanNumber, virtualRouter.Spec.InternalIPs, virtualRouter.Spec.ExternalIPs, virtualRouter.Spec.InternalCIDR); err != nil {
-		klog.ErrorS(err, "Sync failed")
-		return err
-	}
+	// namespace, name, err := cache.SplitMetaNamespaceKey(key)
+	// if err != nil {
+	// 	utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
+	// 	return nil
+	// }
+
+	// for _, pod := range virtualRouterPods {
+	// 	if pod.Namespace != namespace {
+	// 		return nil
+	// 	}
+	// }
+
+	// labelSelector := v1.LabelSelector{MatchLabels: map[string]string{"app": virtualroutermanager.VIRTUALROUTER_LABEL}}
+	// pods, err := c.kubeclientset.CoreV1().Pods(namespace).List(context.TODO(), v1.ListOptions{
+	// 	FieldSelector: fields.OneTermEqualSelector("spec.nodeName", c.networkDaemon.daemonCfg.NodeName).String(),
+	// 	LabelSelector: labels.Set(labelSelector.MatchLabels).String(),
+	// })
+
+	// if err != nil {
+	// 	return err
+	// }
+
 	// dpName := virtualRouter.ObjectMeta.GetName()
 	// dpNamespace := virtualRouter.ObjectMeta.GetNamespace()
 	// deployment, err := c.deploymentsLister.Deployments(dpNamespace).Get(dpName)
@@ -356,5 +453,15 @@ func (c *Controller) enqueueVirtualRouter(obj interface{}) {
 		utilruntime.HandleError(err)
 		return
 	}
-	c.workqueue.Add(key)
+	c.workqueue.Add(virtualrouterKey(key))
+}
+
+func (c *Controller) enqueuePod(obj interface{}) {
+	var key string
+	var err error
+	if key, err = cache.MetaNamespaceKeyFunc(obj); err != nil {
+		utilruntime.HandleError(err)
+		return
+	}
+	c.workqueue.Add(podKey(key))
 }
